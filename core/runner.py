@@ -15,14 +15,14 @@ def set_args(_args):
     args = _args
 
     # then some more args are appended
-    args.backbone = 'resnet50'
+    args.backbone = 'dinov2_vitb14'
     args.nworker = 0
-    args.bsz = 1 # the method works on a single task, hence bsz=1
+    args.bsz = 1  # the method works on a single task, hence bsz=1
     args.fold = 0
 
 
 def makeDataloader():
-    FSSDataset.initialize(img_size=400, datapath=args.datapath)
+    FSSDataset.initialize(img_size=28*14, datapath=args.datapath)
     dataloader = FSSDataset.build_dataloader(args.benchmark, args.bsz, args.nworker, args.fold, 'test', args.nshot)
     return dataloader
 
@@ -54,12 +54,15 @@ def makeConfig():
 
 
 def makeFeatureMaker(dataset, config, device='cpu', randseed=2, feat_extr_method=None):
+    # 初始化特征提取方法，feat_extr_method是dinov2加池化
     utils.fix_randseed(randseed)
     if feat_extr_method is None:
         feat_extr_method = Backbone(args.backbone).to(device).extract_feats
+    # 初始化constrastivehead.py的FeatureMaker类，传入提取方法，当前类，和config
     feat_maker = ctrutils.FeatureMaker(feat_extr_method, dataset.class_ids, config)
     utils.fix_randseed(randseed)
     feat_maker.norm_bb_feats = False
+    # 返回的是constrastivehead.py的FeatureMaker类
     return feat_maker
 
 
@@ -75,10 +78,12 @@ class SingleSampleEval:
         self.verbosity = args.verbosity
 
     def taskAdapt(self, detach=True):
+        # 这个是SingleSampleEval的taskAdapt,获取了图片结果，传入query_img，support_img，support_mask,class
         b = self.batch
         if self.device.type == 'cuda': b = utils.to_cuda(b)
         self.q_img, self.s_img, self.s_mask, self.class_id = b['query_img'], b['support_imgs'], b['support_masks'], b[
             'class_id'].item()
+        # 实际就是调用了contrastivehead.py的feat_maker类的taskAdapt，返回的就是PPT绿框里的特征，经过卷积适应过后的特征,self.task_adapted就是这些特征
         self.task_adapted = self.feat_maker.taskAdapt(self.q_img, self.s_img, self.s_mask, self.class_id)
 
     def compare_feats(self):
@@ -113,10 +118,13 @@ class SingleSampleEval:
     def forward(self):
         self.taskAdapt()
 
+        # 这一步是对经过1*1卷积头转换之后的特征进行Cross Correlation
         self.logit_mask = self.compare_feats()
 
+        # 用来生成对预测的mask，将logit_mask和支持集的mask比较
         self.thresh, self.pred_mask = self.threshold()
 
+        # 没懂
         self.pred_mask = self.postprocess()
 
         return self.logit_mask, self.pred_mask

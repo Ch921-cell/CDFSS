@@ -27,17 +27,12 @@ if __name__ == '__main__':
     dataloader = runner.makeDataloader()
     config = runner.makeConfig()
     config.featext.fit_every_episode = args.adapt_to == 'every-episode'
+    # 返回的是constrastivehead.py的FeatureMaker类
     feat_maker = runner.makeFeatureMaker(dataloader.dataset, config, device=device, randseed=args.seed)
     average_meter = runner.AverageMeterWrapper(dataloader, device)
     
-    if args.benchmark == 'fss':
-        num_tasks = 2400
-    else:
-        num_tasks = 1200
     
     for idx, batch in enumerate(dataloader):
-        if idx > num_tasks:
-            break
         sseval = runner.SingleSampleEval(batch, feat_maker)
         sseval.post_proc_method = args.postprocessing
         sseval.forward()

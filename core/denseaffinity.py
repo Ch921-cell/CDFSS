@@ -60,7 +60,7 @@ class DAMatComparison:
     def algo_mean(self, q_pred_coarses_t, s_mask=None):
         return q_pred_coarses_t.mean(1)
 
-    def calc_q_pred_coarses(self, q_feat_t, s_feat_t, s_mask, l0=3):
+    def calc_q_pred_coarses(self, q_feat_t, s_feat_t, s_mask, l0=0):
         q_pred_coarses = []
         h0, w0 = q_feat_t[l0].shape[-2:]
         for (qft, sft) in zip(q_feat_t[l0:], s_feat_t[l0:]):

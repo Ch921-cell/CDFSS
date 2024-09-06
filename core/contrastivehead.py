@@ -50,7 +50,7 @@ class ContrastiveConfig:
                     'debug': False
                 },
                 'featext': {
-                    'l0': 3,  # the first resnet bottleneck id to consider (0,1,2,3,4,5...15)
+                    'l0': 0,  # the first resnet bottleneck id to consider (0,1,2,3,4,5...15)
                     'fit_every_episode': False
                 }
             }
@@ -91,9 +91,12 @@ class ContrastiveConfig:
 
 def dense_info_nce_loss(original_features, transformed_features, config_nce):
     B, C, H, W = transformed_features.shape
+    # print("original_features", original_features.shape)
+    # print("transformed_features ", transformed_features.shape)
     o_features = original_features.expand(B, C, H, W).permute(0, 2, 3, 1).view(B, H * W, C)
     t_features = transformed_features.permute(0, 2, 3, 1).view(B, H * W, C)
-
+    # print("o_features after expand",o_features.shape)
+    # print("t_features after expand", t_features.shape)
     # Calculate dot product between original and transformed feature vectors for positive pairs
     positive_logits = torch.einsum('bik,bik->bi', o_features, t_features) / config_nce.temperature
 
@@ -130,7 +133,7 @@ def augwise_proto(feat_vol, mask, k, aug):
 def calc_q_pred_coarse_nodetach(qft, sft, s_mask, l0=3):
     bsz, c, hq, wq = qft.shape
     hs, ws = sft.shape[-2:]
-
+    
     sft_row = torch.cat(sft.unbind(1), -1)  # bsz,k,c,h,w -> bsz,c,h,w*k
     smasks_downsampled = [segutils.downsample_mask(m, hs, ws) for m in s_mask.unbind(1)]
     smask_row = torch.cat(smasks_downsampled, -1)
@@ -413,10 +416,12 @@ class Augmen:
 class CTrBuilder:
     # call init 1st, pass all config parameters (init a ContrastiveConfig object in your code)
     def __init__(self, config, augmentator=None):
+        # 生成三个aug图像，augmentator
         if augmentator is None:
-            augmentator = Augmen(config.aug)
+            augmentator = Augmen(config.aug)    # 三个生成的aug图像
         self.augmentator = augmentator
-
+        # 创建AugImgStack类，传入三个AUG图像，调用__init__，只是传入了augmentator
+        # 经过了makeAugmented后，获得了qugimgs
         self.augimgs = self.AugImgStack(augmentator)
 
         self.hasfit = False
@@ -451,8 +456,10 @@ class CTrBuilder:
         # 2. Augmentation
         # 2.1 Apply transformations to images
         self.augimgs.init(s_img)
+        # 返回的是增强后的图片，self的东西都得到了赋值,后面的s_mask可以忽略
         self.augimgs.q, _ = self.augmentator.augment(q_img, s_mask)
 
+        # 对每个support_img都获取增强图片
         for k in range(s_img.shape[1]):
             s_aug_imgs, s_aug_masks = self.augmentator.augment(s_img[:, k], s_mask[:, k])
             self.augimgs.s[:, k] = s_aug_imgs
@@ -462,11 +469,13 @@ class CTrBuilder:
     # 3rd call build_and_fit
     def build_and_fit(self, q_feat, s_feat, q_feataug, s_feataug, s_maskaug=None):
         if s_maskaug is None: s_maskaug = self.augimgs.s_mask
+        # 构建对比的transformer，好好研究卡住，明白了，ctrs接受的是一个列表，里面是训练好的对比转换头
         self.ctrs = self.buildContrastiveTransformers(q_feat, s_feat, q_feataug, s_feataug, s_maskaug)
         self.hasfit = True
 
     def buildContrastiveTransformers(self, qfeat_alllayers, sfeat_alllayers, query_feats_aug, support_feats_aug,
                                      supp_aug_mask, s_mask=None):
+        # l0究竟是什么？
         contrastive_transformers = []
         l0 = self.config.featext.l0
         # [bsz,k,aug,h,w] -> [k*aug,h,w]
@@ -490,6 +499,7 @@ class CTrBuilder:
             sfeataug = sfeataug.view(-1, *qfeataug.shape[-3:])
 
             device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+            # 对应的是PPT里红框部分
             contrastive_head = ContrastiveFeatureTransformer(in_channels=ch, config_model=self.config.model).to(device)
 
             # 3. Feature volumes from untransformed image need to be geometrically mapped to allow for dense matching
@@ -499,7 +509,7 @@ class CTrBuilder:
             mapped_sfeat = self.augmentator.applyAffines(sfeat)
             assert mapped_sfeat.shape[1] == aug and mapped_sfeat.shape[0] == k, "should be k,aug,c,h,w"
             mapped_sfeat = mapped_sfeat.view(-1, *sfeat.shape[-3:])  # ->[k*aug,c,h,w]
-
+            # 获得那些头之后，进行适应和训练，反向传递，更新网络参数。
             contrastive_head.fit(mapped_qfeat, qfeataug, mapped_sfeat, sfeataug,
                                  segutils.downsample_mask(s_aug_mask, h, w), self.config.fitting)
 
@@ -512,6 +522,7 @@ class CTrBuilder:
                 display(segutils.to_pil(segutils.norm(dautils.filterDenseAffinityMap(
                     dautils.buildDenseAffinityMat(contrastive_head(qfeat), contrastive_head(sfeat)),
                     segutils.downsample_mask(s_mask, h, w)).view(1, h, w))))
+        # 返回的是训练好的一个转换头
         return contrastive_transformers
 
     # You have fitted the contrastive transformers, now apply the transform and then pass to the downstream DCAMA
@@ -537,22 +548,28 @@ class CTrBuilder:
 
 class FeatureMaker:
     def __init__(self, feat_extraction_method, class_ids, config=ContrastiveConfig()):
+        # 初始化目前featextractor是特征提取方法
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.featextractor = feat_extraction_method
+        # 为每个种类创造一个c_tr，c_trs 是一个类，这个类目前用来干什么不清楚
         self.c_trs = {ctr: CTrBuilder(config) for ctr in class_ids}
         self.config = config
         self.norm_bb_feats = False
 
     def extract_bb_feats(self, img):
+        # 返回提取的特征
         with torch.no_grad():
             return self.featextractor(img)
 
     def create_and_fit(self, c_tr, q_img, s_img, s_mask, q_feat, s_feat):
         if self.config.model.debug: print('contrastive adaption')
+        # 把c_tr中的变量都赋值了
         c_tr.makeAugmented(q_img, s_img, s_mask)
 
         bsz, k, c, h, w = s_img.shape
+        # n_transformed_imgs增强图数量
         aug = c_tr.augmentator.config.n_transformed_imgs
+        # 提取增强图像的特征
         # [bsz,aug,c,h,w]->[bsz*aug,c,h,w] squeeze for forward pass
         q_feataug = self.extract_bb_feats(c_tr.augimgs.q.view(-1, c, h, w))  # returns layer-list
         # then restore
@@ -560,7 +577,7 @@ class FeatureMaker:
         # [bsz,k,aug,c,h,w]->[bsz*k*aug,c,h,w]->[bsz,k,aug,c,h,w]
         s_feataug = self.extract_bb_feats(c_tr.augimgs.s.view(-1, c, h, w))
         s_feataug = [l.view(bsz, k, aug, *l.shape[1:]) for l in s_feataug]
-
+        # 将原图特征与增强图的特征传入，进行fit
         c_tr.build_and_fit(q_feat, s_feat, q_feataug, s_feataug)
 
     def taskAdapt(self, q_img, s_img, s_mask, class_id):
@@ -572,12 +589,15 @@ class FeatureMaker:
             q_feat = [ch_norm(l) for l in q_feat]
             s_feat = [ch_norm(l) for l in q_feat]
         s_feat = [l.view(bsz, k, *l.shape[1:]) for l in s_feat]
-
+        # 有c_tr
         c_tr = self.c_trs[class_id]  # select the relevant ctr for this class
 
+        # 构建增强后的图片
         if c_tr.hasfit is False or c_tr.config.featext.fit_every_episode:  # create and fit a contrastive transformer if not existing yet
             self.create_and_fit(c_tr, q_img, s_img, s_mask, q_feat, s_feat)
-
+            # 结束了fit， c_tr.ctrs现在是一个队列里面是训练好的转换头,经过了交叉相关
+        # 利用c_tr.ctrs对每个层特征进行适应，得到PPT绿框的特征
         q_feat_t, s_feat_t = c_tr.getTaskAdaptedFeats(q_feat), c_tr.getTaskAdaptedFeats(
             s_feat)  # tocheck: do they require_grad here?
+        # 返回的适应之后的特征
         return q_feat_t, s_feat_t
