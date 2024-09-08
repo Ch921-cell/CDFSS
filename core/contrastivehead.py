@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from utils import segutils
 import core.denseaffinity as dautils
-
+from core.backbone import Backbone
 identity_mapping = lambda x, *args, **kwargs: x
 
 
@@ -237,9 +237,10 @@ class ContrastiveFeatureTransformer(nn.Module):
     # mapped_qfeat_vol, aug_qfeat_vols: [aug,c,h,w]
     # mapped_sfeat_vol, aug_sfeat_vols: [k*aug,c,h,w]
     # augmented_smasks: [k*aug,h,w]
-    def fit(self, mapped_qfeat_vol, aug_qfeat_vols, mapped_sfeat_vol, aug_sfeat_vols, augmented_smasks, config_fit):
+    def fit(self, mapped_qfeat_vol, aug_qfeat_vols, mapped_sfeat_vol, aug_sfeat_vols, augmented_smasks, config_fit, backbone):
         f_norm = F.normalize if config_fit.normalize_after_fwd_pass else identity_mapping
-        optimizer = config_fit.optimizer(self.parameters(), lr=config_fit.lr)
+        # optimizer = config_fit.optimizer(self.parameters(), lr=config_fit.lr)
+        optimizer = config_fit.optimizer(list(self. parameters()) + list(backbone.parameters()), lr=config_fit.lr)
         for epoch in range(config_fit.num_epochs):
             # Pass original and transformed image batches through the model
 
@@ -467,14 +468,14 @@ class CTrBuilder:
         if self.config.aug.debug: self.augimgs.show()
 
     # 3rd call build_and_fit
-    def build_and_fit(self, q_feat, s_feat, q_feataug, s_feataug, s_maskaug=None):
+    def build_and_fit(self, q_feat, s_feat, q_feataug, s_feataug, backbone, s_maskaug=None):
         if s_maskaug is None: s_maskaug = self.augimgs.s_mask
         # 构建对比的transformer，好好研究卡住，明白了，ctrs接受的是一个列表，里面是训练好的对比转换头
-        self.ctrs = self.buildContrastiveTransformers(q_feat, s_feat, q_feataug, s_feataug, s_maskaug)
+        self.ctrs = self.buildContrastiveTransformers(q_feat, s_feat, q_feataug, s_feataug, s_maskaug, backbone)
         self.hasfit = True
 
     def buildContrastiveTransformers(self, qfeat_alllayers, sfeat_alllayers, query_feats_aug, support_feats_aug,
-                                     supp_aug_mask, s_mask=None):
+                                     supp_aug_mask, backbone, s_mask=None):
         # l0究竟是什么？
         contrastive_transformers = []
         l0 = self.config.featext.l0
@@ -511,7 +512,7 @@ class CTrBuilder:
             mapped_sfeat = mapped_sfeat.view(-1, *sfeat.shape[-3:])  # ->[k*aug,c,h,w]
             # 获得那些头之后，进行适应和训练，反向传递，更新网络参数。
             contrastive_head.fit(mapped_qfeat, qfeataug, mapped_sfeat, sfeataug,
-                                 segutils.downsample_mask(s_aug_mask, h, w), self.config.fitting)
+                                 segutils.downsample_mask(s_aug_mask, h, w), self.config.fitting, backbone)
 
             contrastive_transformers.append(contrastive_head)
             # show how support image and its augmentations would produce a affinity map
@@ -558,10 +559,12 @@ class FeatureMaker:
 
     def extract_bb_feats(self, img):
         # 返回提取的特征
+        # with torch.no_grad():
+        #     return self.featextractor(img)
         with torch.no_grad():
-            return self.featextractor(img)
+            return self.featextractor.extract_feats(img)
 
-    def create_and_fit(self, c_tr, q_img, s_img, s_mask, q_feat, s_feat):
+    def create_and_fit(self, c_tr, q_img, s_img, s_mask, q_feat, s_feat, backbone):
         if self.config.model.debug: print('contrastive adaption')
         # 把c_tr中的变量都赋值了
         c_tr.makeAugmented(q_img, s_img, s_mask)
@@ -578,9 +581,9 @@ class FeatureMaker:
         s_feataug = self.extract_bb_feats(c_tr.augimgs.s.view(-1, c, h, w))
         s_feataug = [l.view(bsz, k, aug, *l.shape[1:]) for l in s_feataug]
         # 将原图特征与增强图的特征传入，进行fit
-        c_tr.build_and_fit(q_feat, s_feat, q_feataug, s_feataug)
+        c_tr.build_and_fit(q_feat, s_feat, q_feataug, s_feataug, backbone)
 
-    def taskAdapt(self, q_img, s_img, s_mask, class_id):
+    def taskAdapt(self, q_img, s_img, s_mask, class_id, backbone):
         ch_norm = lambda t: t / torch.linalg.norm(t, dim=1)
         q_feat = self.extract_bb_feats(q_img)
         bsz, k, c, h, w = s_img.shape
@@ -594,7 +597,7 @@ class FeatureMaker:
 
         # 构建增强后的图片
         if c_tr.hasfit is False or c_tr.config.featext.fit_every_episode:  # create and fit a contrastive transformer if not existing yet
-            self.create_and_fit(c_tr, q_img, s_img, s_mask, q_feat, s_feat)
+            self.create_and_fit(c_tr, q_img, s_img, s_mask, q_feat, s_feat, backbone)
             # 结束了fit， c_tr.ctrs现在是一个队列里面是训练好的转换头,经过了交叉相关
         # 利用c_tr.ctrs对每个层特征进行适应，得到PPT绿框的特征
         q_feat_t, s_feat_t = c_tr.getTaskAdaptedFeats(q_feat), c_tr.getTaskAdaptedFeats(

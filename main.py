@@ -35,7 +35,7 @@ if __name__ == '__main__':
     for idx, batch in enumerate(dataloader):
         sseval = runner.SingleSampleEval(batch, feat_maker)
         sseval.post_proc_method = args.postprocessing
-        sseval.forward()
+        sseval.forward(feat_maker.featextractor)
         sseval.calc_metrics()
         average_meter.update(sseval)
         average_meter.write(idx)

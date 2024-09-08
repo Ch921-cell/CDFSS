@@ -114,13 +114,15 @@ class Backbone(nn.Module):
         c = 768
         h = 28
         w = 28
+        for param in self.feature_extractor.parameters():
+            param.requires_grad = False
         with torch.no_grad():
             features_dict = self.feature_extractor.forward_features(img)
             feat = features_dict['x_norm_patchtokens']
         feat = feat.permute(0,2,1).contiguous()
         feat = feat.view(-1,c,h,w)
         feats.append(feat)
-        # # block_1
+        # block_1
         # feat_1 = self.upsample(feat)
         # feat_1 = self.upsample(feat_1)
         # feat_1 = self.C2F1_0(feat_1)
@@ -134,10 +136,10 @@ class Backbone(nn.Module):
         # feat_2 = self.C2F2_2(feat_2)
         # feats.append(feat_2)
         # # block_3
-        # feat_3 = self.C2F3_0(feat)
+        feat_3 = self.C2F3_0(feat)
         # feat_3 = self.C2F3_1(feat_3)
         # feat_3 = self.C2F3_2(feat_3)
-        # feats.append(feat_3)
+        feats.append(feat_3)
         
         return feats
 

@@ -57,7 +57,8 @@ def makeFeatureMaker(dataset, config, device='cpu', randseed=2, feat_extr_method
     # 初始化特征提取方法，feat_extr_method是dinov2加池化
     utils.fix_randseed(randseed)
     if feat_extr_method is None:
-        feat_extr_method = Backbone(args.backbone).to(device).extract_feats
+        # feat_extr_method = Backbone(args.backbone).to(device).extract_feats
+        feat_extr_method = Backbone(args.backbone).to(device)   #传入的是backbone
     # 初始化constrastivehead.py的FeatureMaker类，传入提取方法，当前类，和config
     feat_maker = ctrutils.FeatureMaker(feat_extr_method, dataset.class_ids, config)
     utils.fix_randseed(randseed)
@@ -72,19 +73,19 @@ class SingleSampleEval:
         self.damat_comp = dautils.DAMatComparison()
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.batch = batch
-        self.feat_maker = feat_maker
+        self.feat_maker = feat_maker    # 目前传入的feat_maker.featextractor是backbone
         self.thresh_method = 'pred_mean'
         self.post_proc_method = 'off'
         self.verbosity = args.verbosity
 
-    def taskAdapt(self, detach=True):
+    def taskAdapt(self, backbone, detach=True):
         # 这个是SingleSampleEval的taskAdapt,获取了图片结果，传入query_img，support_img，support_mask,class
         b = self.batch
         if self.device.type == 'cuda': b = utils.to_cuda(b)
         self.q_img, self.s_img, self.s_mask, self.class_id = b['query_img'], b['support_imgs'], b['support_masks'], b[
             'class_id'].item()
         # 实际就是调用了contrastivehead.py的feat_maker类的taskAdapt，返回的就是PPT绿框里的特征，经过卷积适应过后的特征,self.task_adapted就是这些特征
-        self.task_adapted = self.feat_maker.taskAdapt(self.q_img, self.s_img, self.s_mask, self.class_id)
+        self.task_adapted = self.feat_maker.taskAdapt(self.q_img, self.s_img, self.s_mask, self.class_id,backbone)
 
     def compare_feats(self):
         if self.task_adapted is None:
@@ -115,8 +116,8 @@ class SingleSampleEval:
         return crfutils.apply_crf(self.q_img, self.logit_mask, segutils.thresh_fn(self.thresh_method)).to(self.device) if apply else self.pred_mask
 
     # this method calls above components sequentially
-    def forward(self):
-        self.taskAdapt()
+    def forward(self, Backbone):
+        self.taskAdapt(Backbone)
 
         # 这一步是对经过1*1卷积头转换之后的特征进行Cross Correlation
         self.logit_mask = self.compare_feats()
