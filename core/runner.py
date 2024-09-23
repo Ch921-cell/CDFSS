@@ -15,7 +15,7 @@ def set_args(_args):
     args = _args
 
     # then some more args are appended
-    args.backbone = 'dinov2_vitb14'
+    args.backbone = 'dinov2_vitl14'
     args.nworker = 0
     args.bsz = 1  # the method works on a single task, hence bsz=1
     args.fold = 0
@@ -85,7 +85,7 @@ class SingleSampleEval:
         self.q_img, self.s_img, self.s_mask, self.class_id = b['query_img'], b['support_imgs'], b['support_masks'], b[
             'class_id'].item()
         # 实际就是调用了contrastivehead.py的feat_maker类的taskAdapt，返回的就是PPT绿框里的特征，经过卷积适应过后的特征,self.task_adapted就是这些特征
-        self.task_adapted = self.feat_maker.taskAdapt(self.q_img, self.s_img, self.s_mask, self.class_id,backbone)
+        self.task_adapted = self.feat_maker.taskAdapt(self.q_img, self.s_img, self.s_mask, self.class_id, backbone)
 
     def compare_feats(self):
         if self.task_adapted is None:
